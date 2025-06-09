@@ -116,49 +116,57 @@ function App() {
   }
 
   async function fetchGroupStats(
-    groupId: string,
-    key: string,
-    controller: AbortController
-  ): Promise<AggregatedGame[]> {
-    const allMembers = await getGroupMembers(groupId, controller);
-    setTotal(allMembers.length);
-    
-    let collected: PlayerGame[] = [];
-    let index = 0;
-    const batchSize = 20;
+  groupId: string,
+  key: string,
+  controller: AbortController
+): Promise<AggregatedGame[]> {
+  const allMembers = await getGroupMembers(groupId, controller);
+  setTotal(allMembers.length);
 
-    while (index < allMembers.length && !controller.signal.aborted) {
-      const chunk = allMembers.slice(index, index + batchSize);
-      index += batchSize;
+  let collected: PlayerGame[] = [];
+  let index = 0;
+  const batchSize = 20;
 
-      const results = await Promise.all(
-        chunk.map(async (id) => {
-          try {
-            const data = await getOwnedGames(id, key, controller);
-            if (data) {
-              setLog((prev) => [...prev, `${data.playerName} — ${data.games.length} games`]);
-              setProgress(index);
-              return data;
-            }
-          } catch (e) {
-            if (!controller.signal.aborted) {
-              console.error(`Error processing user ${id}:`, e);
-            }
-          }
-          return null;
-        })
-      );
-
-      collected.push(...results.filter(Boolean) as PlayerGame[]);
+  // 👉 Вынесенная функция вне цикла
+  async function processMember(
+    id: string,
+    progressValue: number
+  ): Promise<PlayerGame | null> {
+    try {
+      const data = await getOwnedGames(id, key, controller);
+      if (data) {
+        setLog((prev) => [...prev, `${data.playerName} — ${data.games.length} games`]);
+        setProgress(progressValue);
+        return data;
+      }
+    } catch (e) {
+      if (!controller.signal.aborted) {
+        console.error(`Error processing user ${id}:`, e);
+      }
     }
-
-    if (controller.signal.aborted) {
-      throw new Error("Request aborted");
-    }
-
-    return aggregateGames(collected);
+    return null;
   }
 
+  while (index < allMembers.length && !controller.signal.aborted) {
+    const chunk = allMembers.slice(index, index + batchSize);
+    const progressValue = index + batchSize;
+    index += batchSize;
+
+    const results = await Promise.all(
+      chunk.map((id) => processMember(id, progressValue))
+    );
+
+    collected.push(...results.filter(Boolean) as PlayerGame[]);
+  }
+
+  if (controller.signal.aborted) {
+    throw new Error("Request aborted");
+  }
+
+  return aggregateGames(collected);
+  }
+
+  
   async function getGroupMembers(
     groupId: string,
     controller: AbortController
